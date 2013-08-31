@@ -1,0 +1,195 @@
+/* 
+ * Copyright (C) 2002-2012 Raphael Mudge (rsmudge@gmail.com)
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of 
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ */
+package sleep.bridges.io;
+
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Stack;
+
+import sleep.bridges.SleepClosure;
+import sleep.runtime.Scalar;
+import sleep.runtime.ScriptEnvironment;
+import sleep.runtime.ScriptInstance;
+import sleep.runtime.SleepUtils;
+
+public class SocketObject extends IOObject<Socket> {
+	
+	protected Socket socket;
+	
+	/** returns the socket used for this connection */
+	@Override
+	public Socket getSource() {
+	
+		return socket;
+	}
+	
+	public void open(final SocketHandler params, final ScriptEnvironment env) {
+	
+		try {
+			socket = new Socket();
+			
+			if (params.laddr != null) {
+				socket.bind(new InetSocketAddress(params.laddr, params.lport));
+			}
+			
+			socket.connect(new InetSocketAddress(params.host, params.port), params.timeout);
+			
+			socket.setSoLinger(true, params.linger);
+			
+			openRead(socket.getInputStream());
+			openWrite(socket.getOutputStream());
+		} catch (final Exception ex) {
+			env.flagError(ex);
+		}
+	}
+	
+	/** releases the socket binding for the specified port */
+	public static void release(final int port) {
+	
+		final String key = port + "";
+		
+		ServerSocket temp = null;
+		if (SocketObject.servers != null && SocketObject.servers.containsKey(key)) {
+			temp = SocketObject.servers.get(key);
+			SocketObject.servers.remove(key);
+			
+			try {
+				temp.close();
+			} catch (final Exception ex) {
+				ex.printStackTrace();
+			}
+		}
+	}
+	
+	private static Map<String, ServerSocket> servers;
+	
+	private static ServerSocket getServerSocket(final int port, final SocketHandler params) throws Exception {
+	
+		final String key = port + "";
+		
+		if (SocketObject.servers == null) {
+			SocketObject.servers = Collections.synchronizedMap(new HashMap<String, ServerSocket>());
+		}
+		
+		ServerSocket server = null;
+		
+		if (SocketObject.servers.containsKey(key)) {
+			server = SocketObject.servers.get(key);
+		} else {
+			server = new ServerSocket(port, params.backlog, params.laddr != null ? InetAddress.getByName(params.laddr) : null);
+			SocketObject.servers.put(key, server);
+		}
+		
+		return server;
+	}
+	
+	public void listen(final SocketHandler params, final ScriptEnvironment env) {
+	
+		ServerSocket server = null;
+		
+		try {
+			server = SocketObject.getServerSocket(params.port, params);
+			server.setSoTimeout(params.timeout);
+			
+			socket = server.accept();
+			socket.setSoLinger(true, params.linger);
+			
+			params.callback.setValue(SleepUtils.getScalar(socket.getInetAddress().getHostAddress()));
+			
+			openRead(socket.getInputStream());
+			openWrite(socket.getOutputStream());
+			
+			return;
+		} catch (final Exception ex) {
+			env.flagError(ex);
+		}
+	}
+	
+	@Override
+	public void close() {
+	
+		try {
+			socket.close();
+		} catch (final Exception ex) {
+		}
+		
+		super.close();
+	}
+	
+	public static final int LISTEN_FUNCTION = 1;
+	
+	public static final int CONNECT_FUNCTION = 2;
+	
+	public static class SocketHandler implements Runnable {
+		
+		public ScriptInstance script;
+		
+		public SleepClosure function;
+		
+		public SocketObject socket;
+		
+		public int port;
+		
+		public int timeout;
+		
+		public String host;
+		
+		public Scalar callback;
+		
+		public int type;
+		
+		public String laddr;
+		
+		public int lport;
+		
+		public int linger;
+		
+		public int backlog;
+		
+		public void start() {
+		
+			if (function != null) {
+				socket.setThread(new Thread(this));
+				socket.getThread().start();
+			} else {
+				run();
+			}
+		}
+		
+		@Override
+		public void run() {
+		
+			if (type == SocketObject.LISTEN_FUNCTION) {
+				socket.listen(this, script.getScriptEnvironment());
+			} else {
+				socket.open(this, script.getScriptEnvironment());
+			}
+			
+			if (function != null) {
+				final Stack<Scalar> args = new Stack<Scalar>();
+				args.push(SleepUtils.getScalar(socket));
+				function.callClosure("&callback", script, args);
+			}
+		}
+	}
+}

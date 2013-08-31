@@ -1,0 +1,339 @@
+/* 
+ * Copyright (C) 2002-2012 Raphael Mudge (rsmudge@gmail.com)
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of 
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ */
+package sleep.parser;
+
+public class LexicalAnalyzer {
+	
+	protected static Rule PAREN_RULE, BLOCK_RULE, INDEX_RULE, DQUOTE_RULE, SQUOTE_RULE, BACKTICK_RULE, COMMENT_RULE;
+	
+	protected static char EndOfTerm;
+	
+	static {
+		LexicalAnalyzer.BLOCK_RULE = new Rule("Mismatched Braces - missing open brace", "Mismatched Braces - missing close brace", '{', '}');
+		LexicalAnalyzer.INDEX_RULE = new Rule("Mismatched Indices - missing open index", "Mismatched Indices - missing close index", '[', ']');
+		LexicalAnalyzer.DQUOTE_RULE = new Rule("Runaway string", '"');
+		LexicalAnalyzer.SQUOTE_RULE = new Rule("Runaway string", '\'');
+		LexicalAnalyzer.BACKTICK_RULE = new Rule("Runaway string", '`');
+		LexicalAnalyzer.PAREN_RULE = new Rule("Mismatched Parentheses - missing open paren", "Mismatched Parentheses - missing close paren", '(', ')');
+		LexicalAnalyzer.COMMENT_RULE = new CommentRule();
+		
+		LexicalAnalyzer.EndOfTerm = ';';
+	}
+	
+	private static boolean isSkippable(final Parser p, final char f) {
+	
+		return LexicalAnalyzer.isWhite(f) || LexicalAnalyzer.isEndOfTerm(p, f) || LexicalAnalyzer.isEndOfLine(f);
+	}
+	
+	private static boolean isWhite(final char f) {
+	
+		return f == ' ' || f == '\t';
+	}
+	
+	// special function for determining if we have encountered a built in operator, and to analyze the surrounding
+	// environment of the "built in" operator to resolve any ambiguity.  
+	//
+	// using this effectively removes the white space requirement for said built in operator.  
+	private static boolean isBuiltInOperator(final char f, final StringBuffer aTerm, final StringIterator iter) {
+	
+		if (f == '.' && (aTerm.length() <= 0 || !(Character.isDigit(aTerm.charAt(aTerm.length() - 1)) && aTerm.charAt(0) != '$')) && !iter.isNextChar('=')) {
+			return true;
+		}
+		
+		return false;
+	}
+	
+	private static boolean isEndOfTerm(final Parser parser, final char f) {
+	
+		return f == parser.EndOfTerm;
+	}
+	
+	private static boolean isEndOfLine(final char f) {
+	
+		return f == '\n' || f == '\r';
+	}
+	
+	/**
+	 * a general pass over the list of tokens, we create terms and then pass
+	 * over them creating combined terms
+	 */
+	public static TokenList GroupBlockTokens(final Parser parser, final StringIterator i) {
+	
+		return LexicalAnalyzer.GroupTokens(parser, i, ';');
+	}
+	
+	/**
+	 * a general pass over the list of tokens, we create terms and then pass
+	 * over them creating combined terms
+	 */
+	public static TokenList GroupExpressionIndexTokens(final Parser parser, final StringIterator i) {
+	
+		return LexicalAnalyzer.GroupTokens(parser, i, ':');
+	}
+	
+	private static TokenList GroupTokens(final Parser parser, final StringIterator i, final char Eot) {
+	
+		parser.setEndOfTerm(Eot);
+		
+		final Token[] terms = LexicalAnalyzer.CreateTerms(parser, i).getTokens();
+		
+		final TokenList value = new TokenList();
+		
+		StringBuffer rhs = new StringBuffer();
+		int tok = 0;
+		
+		for (int x = 0; x < terms.length; x++) {
+			if (x + 1 < terms.length) {
+				String a, b;
+				a = terms[x].toString();
+				b = terms[x + 1].toString();
+				
+				tok = x;
+				
+				if (x + 2 < terms.length && Checkers.isClassLiteral(a) && b.equals(".")) {
+					rhs.append(terms[x]);
+					
+					/** collapse a literal class string plz */
+					while(x + 2 < terms.length && terms[x + 1].toString().equals(".") && Checkers.isClassPiece(terms[x + 2].toString())) {
+						rhs.append(".");
+						rhs.append(terms[x + 2]);
+						x += 2;
+					}
+				} else if (Checkers.isFunctionCall(a, b) || Checkers.isIndexableItem(a, b)) {
+					rhs.append(a.toString());
+					rhs.append(b.toString());
+					
+					x++;
+					
+					while(x + 1 < terms.length && Checkers.isIndex(terms[x + 1].toString())) {
+						rhs.append(terms[x + 1].toString());
+						x++;
+					}
+				}
+			}
+			
+			if (rhs.length() > 0) {
+				value.add(ParserUtilities.makeToken(rhs.toString(), terms[tok]));
+				rhs = new StringBuffer();
+			} else if (!Checkers.isComment(terms[x].toString())) {
+				value.add(terms[x]);
+			} else {
+				parser.addComment(terms[x].toString());
+			}
+		}
+		
+		return value;
+	}
+	
+	public static TokenList GroupParameterTokens(final Parser parser, final StringIterator f) {
+	
+		return LexicalAnalyzer.GroupTokens(parser, f, ',');
+	}
+	
+	public static TokenList CreateTerms(final Parser parser, final StringIterator f) {
+	
+		return LexicalAnalyzer.CreateTerms(parser, f, true, true);
+	}
+	
+	public static TokenList CreateTerms(final Parser parser, final StringIterator f, final boolean showEOT, final boolean showEOL) {
+	
+		final Rule temp[] = new Rule[7];
+		temp[0] = LexicalAnalyzer.PAREN_RULE.copyRule(); // Rule objects hold state information related to open and closed
+		temp[1] = LexicalAnalyzer.BLOCK_RULE.copyRule(); // constructs.  As such the static rules should never be passed
+		temp[2] = LexicalAnalyzer.DQUOTE_RULE.copyRule(); // directly to the lexer or the thread safeness of the lexer will
+		temp[3] = LexicalAnalyzer.SQUOTE_RULE.copyRule(); // be destroyed.  We definetly do not want that... :P
+		temp[4] = LexicalAnalyzer.INDEX_RULE.copyRule();
+		temp[5] = LexicalAnalyzer.BACKTICK_RULE.copyRule();
+		temp[6] = LexicalAnalyzer.COMMENT_RULE; // not really a necessity since comment rules just return themselves.
+		
+		return LexicalAnalyzer.CreateTerms(parser, f, temp, showEOT, showEOL);
+	}
+	
+	//
+	// the purpose of this function is to skip past the current stuff and find the match to the passed in term.
+	// 
+	private static String AdvanceTerms(final Parser report, final StringIterator iterator, final Rule term, final Rule[] rules) {
+	
+		term.witnessOpen(new Token(iterator.getEntireLine(), iterator.getLineNumber(), iterator.getLineMarker()));
+		
+		final StringBuffer value = new StringBuffer();
+		
+		final int initialLine = iterator.getLineNumber();
+		
+		while(iterator.hasNext()) {
+			final char temp = iterator.next();
+			
+			if (temp == '\\' && term.getType() == Rule.PRESERVE_SINGLE && term != LexicalAnalyzer.COMMENT_RULE) {
+				if (!iterator.hasNext() && report != null) {
+					report.reportError("Escape is end of string", new Token(value.toString(), iterator.getLineNumber(), iterator.getLineMarker()));
+				} else {
+					value.append(temp);
+					value.append(iterator.next());
+				}
+			} else if (term.isRight(temp) || term.isMatch(temp)) {
+				term.witnessClose(new Token(iterator.getEntireLine(), iterator.getLineNumber(), iterator.getLineMarker()));
+				return value.toString();
+			} else if (term.getType() != Rule.PRESERVE_SINGLE && term != LexicalAnalyzer.COMMENT_RULE) {
+				boolean match = false;
+				
+				for (final Rule rule : rules) {
+					if (rule.isLeft(temp) || rule.isMatch(temp)) {
+						final String result = LexicalAnalyzer.AdvanceTerms(report, iterator, rule, rules);
+						
+						if (result != null) {
+							value.append(rule.wrap(result));
+						} else {
+							return null;
+						}
+						
+						match = true;
+						break;
+					} else if (rule.isRight(temp) && rule != term) {
+						rule.witnessClose(new Token(iterator.getEntireLine(), iterator.getLineNumber(), iterator.getLineMarker()));
+					}
+				}
+				
+				if (!match) {
+					value.append(temp);
+				}
+			} else {
+				value.append(temp);
+			}
+		}
+		
+		return null;
+	}
+	
+	public static TokenList CreateTerms(final Parser parser, final StringIterator iterator, final Rule rules[], final boolean showEOT, final boolean showEOL) {
+	
+		final TokenList terms = new TokenList();
+		boolean match = false;
+		
+		Token newTerm;
+		
+		StringBuffer aTerm = new StringBuffer();
+		
+		while(iterator.hasNext()) {
+			match = false;
+			
+			final char temp = iterator.next();
+			
+			for (final Rule rule : rules) {
+				if (rule.isLeft(temp) || rule.isMatch(temp)) {
+					if (aTerm.length() > 0) {
+						newTerm = new Token(LexicalAnalyzer.trim(parser, aTerm.toString()), iterator.getLineNumber());
+						terms.add(newTerm);
+						aTerm = new StringBuffer();
+					}
+					
+					final int curLine = iterator.getLineNumber(); // lets get the current line not the line at the "end" of the term
+					
+					String result = LexicalAnalyzer.AdvanceTerms(parser, iterator, rule, rules);
+					
+					if (result == null) {
+						result = ""; // let it wrap something
+					}
+					
+					newTerm = new Token(rule.wrap(result), curLine);
+					terms.add(newTerm);
+					
+					match = true;
+					break;
+				} else if (rule.isRight(temp)) {
+					rule.witnessClose(new Token(iterator.getEntireLine(), iterator.getLineNumber()));
+				}
+			}
+			
+			if (match) {
+				continue;
+			}
+			
+			if (LexicalAnalyzer.isEndOfTerm(parser, temp)) {
+				if (aTerm.length() > 0) {
+					newTerm = new Token(LexicalAnalyzer.trim(parser, aTerm.toString()), iterator.getLineNumber());
+					terms.add(newTerm);
+					aTerm = new StringBuffer();
+				}
+				
+				newTerm = new Token("EOT", iterator.getLineNumber());
+				terms.add(newTerm);
+			} else if (LexicalAnalyzer.isBuiltInOperator(temp, aTerm, iterator)) {
+				if (aTerm.length() > 0) {
+					newTerm = new Token(LexicalAnalyzer.trim(parser, aTerm.toString()), iterator.getLineNumber());
+					terms.add(newTerm);
+					aTerm = new StringBuffer();
+				}
+				
+				terms.add(new Token(temp + "", iterator.getLineNumber())); // add the built in operator as a token...
+			} else if (LexicalAnalyzer.isSkippable(parser, temp)) {
+				if (aTerm.length() > 0) {
+					/* why is this happening here, you may be asking.  Well for the sake of future generations
+					   I introduced a nasty ambiguity creating a function %() for intializing hashes which of
+					   course to my friendly top down parser is easily mistaken with 3 % (some expr) for doing
+					   typical modulus operations.  So if there is whitespace following the % char then I preserve
+					   it so the parser can differentiate a hash literal from a MOD math operation. */
+					if (aTerm.length() == 1 && aTerm.charAt(0) == '%') {
+						newTerm = new Token("% ", iterator.getLineNumber());
+					} else {
+						newTerm = new Token(LexicalAnalyzer.trim(parser, aTerm.toString()), iterator.getLineNumber());
+					}
+					terms.add(newTerm);
+					aTerm = new StringBuffer();
+				}
+			} else {
+				aTerm.append(temp);
+			}
+		}
+		
+		if (aTerm.length() > 0) {
+			newTerm = new Token(LexicalAnalyzer.trim(parser, aTerm.toString()), iterator.getLineNumber());
+			terms.add(newTerm);
+		}
+		
+		for (int x = 0; x < rules.length; x++) {
+			if (!rules[x].isBalanced()) {
+				parser.reportError(rules[x].getSyntaxError());
+			}
+		}
+		
+		return terms;
+	}
+	
+	public static String trim(final Parser parser, final String blah) {
+	
+		if (blah.length() == 0 || blah.equals(" ")) {
+			return "";
+		}
+		
+		int x = 0;
+		while(x < blah.length() && LexicalAnalyzer.isSkippable(parser, blah.charAt(x))) {
+			x++;
+		}
+		
+		int y = blah.length() - 1;
+		while(y > 0 && LexicalAnalyzer.isSkippable(parser, blah.charAt(y))) {
+			y--;
+		}
+		
+		if (x > y) {
+			return "";
+		}
+		
+		return blah.substring(x, y + 1);
+	}
+}
