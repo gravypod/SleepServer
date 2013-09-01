@@ -1,12 +1,8 @@
 package com.gravypod.SleepServer;
 
-import java.io.File;
-import java.io.IOException;
 import java.util.Map;
 
-import fi.iki.elonen.SimpleWebServer;
-
-public class Site extends Thread {
+public class Site {
 	
 	private int port = 80;
 	
@@ -16,18 +12,14 @@ public class Site extends Thread {
 	
 	private String rootDir = "./sites/";
 	
-	private Map<String, String> mimiTypes;
-	
-	private String[] indexFiles;
-	
-	public Site(String[] indexFiles, Map<String, String> mimi, Map<String, String> props) {
+	public Site(Map<String, String> props) {
 	
 		String sitename = props.get("sitename");
 		if (!(sitename == null)) {
 			this.name = sitename;
 		}
-		String serveraddress = props.get("severaddress");
-		if (!(host == null))
+		String serveraddress = props.get("serveraddress");
+		if (!(serveraddress == null))
 			this.host = serveraddress;
 		String siteport = props.get("siteport");
 		try {
@@ -38,31 +30,12 @@ public class Site extends Thread {
 		}
 		String rootdirectory = props.get("rootdirectory");
 		this.rootDir = rootdirectory;
-		this.mimiTypes = mimi;
-		this.indexFiles = indexFiles;
-		System.out.println(mimi.toString());
+		System.out.println("Starting host: " + host);
 	}
 	
+	public String matchingHost() {
 	
-	
-	public SimpleWebServer init() {
-	
-		SimpleWebServer server = new SimpleWebServer(/*host, */port, new File(rootDir), mimiTypes, indexFiles);
-		
-		return server;
-		
-	}
-	
-	@Override
-	public void run() {
-	
-		SimpleWebServer server = init();
-		System.out.println("Starting server " + this.name);
-		try {
-			server.start();
-		} catch (IOException e) {
-			e.printStackTrace();
-		}
+		return host != null ? getHost().replace("?", ".?").replace("*", ".*?") : host;
 	}
 	
 	public String getHost() {

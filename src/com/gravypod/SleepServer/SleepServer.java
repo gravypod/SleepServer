@@ -2,7 +2,14 @@ package com.gravypod.SleepServer;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Scanner;
+
+import fi.iki.elonen.SimpleWebServer;
 
 import sleep.error.YourCodeSucksException;
 import sleep.runtime.ScriptInstance;
@@ -19,9 +26,9 @@ public class SleepServer {
 		Site[] sites = null;
 		
 		File configsRoot = new File("./configs/");
+		SleepConfig config = new SleepConfig(loader, configsRoot);
 		try {
 			System.out.println("Loading config");
-			SleepConfig config = new SleepConfig(loader, configsRoot);
 			loader.addGlobalBridge(config);
 			ScriptInstance instance = loader.loadScript("./configs/config.sl");
 			System.out.println("Config loaded. Parsing");
@@ -40,22 +47,26 @@ public class SleepServer {
 			System.exit(1);
 		}
 		
+		String[] indexFiles = config.getIndexFiles();
+		Map<String, String> mimiTypes = config.getMimi();
+		
+		List<Integer> ports = new ArrayList<Integer>();
+		
 		for (Site s : sites) {
-			s.start();
-		}
-
-		Scanner sc = new Scanner(System.in);
-		
-		while (sc.hasNext()) {
-			String next = sc.nextLine();
-			switch (next) {
-				case "kill":
-				case "shutdown":
-				case "stop":
-					System.exit(0);
+			
+			if (!ports.contains(s.getPort())) {
+				ports.add(s.getPort());
 			}
+			
 		}
+		Integer[] portsInArray = Arrays.copyOf(ports.<Integer>toArray(new Integer[1]), ports.size());
+		int[] p = new int[portsInArray.length];
+		for (int i = 0; i < p.length; i++) {
+			p[i] = (int) portsInArray[i];
+		}
+		SimpleWebServer server = new SimpleWebServer(sites, p, mimiTypes, indexFiles);
 		
+		server.run();
 		
 		
 	}

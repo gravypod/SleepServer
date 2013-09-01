@@ -1,5 +1,6 @@
 %map = %(default => %(
 		sitename => 'default', 
+		serveraddress => 'home.gravypod.com',
 		rootdirectory => './sites/',
 		siteport => '8080',
 	));

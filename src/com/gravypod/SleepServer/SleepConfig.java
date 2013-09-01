@@ -45,7 +45,8 @@ public class SleepConfig implements Loadable {
 		globals.putScalar("%__MIMI__", mimi);
 		globals.putScalar("@__INDEXFILES__", indexFiles);
 		globals.putScalar("%__SITES__", sites);
-		Hashtable enviroment = script.getScriptEnvironment().getEnvironment();
+		@SuppressWarnings("unchecked")
+        Hashtable<String, Object> enviroment = script.getScriptEnvironment().getEnvironment();
 		enviroment.put("&require", new Require());
 		
 	}
@@ -57,21 +58,18 @@ public class SleepConfig implements Loadable {
 	
 	public Site[] getSites() {
 	
-		HashMap<String, HashMap<String, String>> map = (HashMap<String, HashMap<String, String>>) SleepUtils.getMapFromHash(this.sites);
+		@SuppressWarnings("unchecked")
+        HashMap<String, HashMap<String, String>> map = (HashMap<String, HashMap<String, String>>) SleepUtils.getMapFromHash(this.sites);
 		
 		Site[] sites = new Site[map.values().size()];
 		
 		int i = 0;
 		
-		String[] indexs = getIndexFiles();
-		
-		Map<String, String> mimi = getMimi();
-		
 		
 		for (String name : map.keySet()) {
 			HashMap<String, String> props = map.get(name);
 			System.out.println(props.toString());
-			Site site = new Site(indexs, mimi, props);
+			Site site = new Site(props);
 			sites[i] = site;
 			
 		}

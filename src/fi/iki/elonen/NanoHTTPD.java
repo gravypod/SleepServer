@@ -20,6 +20,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Scanner;
 import java.util.StringTokenizer;
 import java.util.TimeZone;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -92,18 +93,12 @@ public abstract class NanoHTTPD {
 	 */
 	public static final String MIME_HTML = "text/html";
 	
-	private final ScriptLoader loader = new ScriptLoader();
-	
 	/**
 	 * Common mime type for dynamic content: binary
 	 */
 	public static final String MIME_DEFAULT_BINARY = "application/octet-stream";
 	
-	private int myPort;
-	
-	private ServerSocketChannel myServerSocket;
-	
-	private final ThreadPoolExecutor theadPool;
+	private int[] myPort;
 	
 	/**
 	 * Pseudo-Parameter to use to store the actual query string in the
@@ -115,23 +110,19 @@ public abstract class NanoHTTPD {
 	
 	public NanoHTTPD(final int port) {
 	
-		myPort = port;
-		final TimeUnit timeUnit = TimeUnit.MICROSECONDS;
-		
-		final ArrayBlockingQueue<Runnable> threadQueue = new ArrayBlockingQueue<Runnable>(100);
-		
-		theadPool = new ThreadPoolExecutor(1, 100, 10, timeUnit, threadQueue);
-		
-		tempFileManagerFactory = new DefaultTempFileManagerFactory();
+		myPort = new int[] { port };
 		final SimpleDateFormat gmtFrmt = new SimpleDateFormat("E, d MMM yyyy HH:mm:ss 'GMT'", Locale.US);
 		gmtFrmt.setTimeZone(TimeZone.getTimeZone("GMT"));
 		simpleDateFormat.set(gmtFrmt);
 		
 	}
 	
-	public void setPort(int myPort) {
+	public NanoHTTPD(int[] ports) {
 	
-		this.myPort = myPort;
+		myPort = ports;
+		final SimpleDateFormat gmtFrmt = new SimpleDateFormat("E, d MMM yyyy HH:mm:ss 'GMT'", Locale.US);
+		gmtFrmt.setTimeZone(TimeZone.getTimeZone("GMT"));
+		simpleDateFormat.set(gmtFrmt);
 	}
 	
 	/**
@@ -140,64 +131,45 @@ public abstract class NanoHTTPD {
 	 * @throws IOException
 	 *             if the socket is in use.
 	 */
-	public void start() throws IOException {
-	
-		loader.setGlobalCache(true);
-		
-		myServerSocket = ServerSocketChannel.open();
-		
-		myServerSocket.configureBlocking(false);
-		
-		myServerSocket.bind(new InetSocketAddress(myPort));
-		do {
-			try {
-				
-				final long start = System.nanoTime();
-				
-				final SocketChannel finalAccept = myServerSocket.accept();
-				
-				if (finalAccept == null) {
-					try {
-						Thread.sleep(1L);
-					} catch (final InterruptedException e) {
-					}
-					continue;
-				}
-				
-				theadPool.execute(new Runnable() {
-					
-					@Override
-					public void run() {
-					
-						final TempFileManager tempFileManager = tempFileManagerFactory.create();
-						
-						final HTTPSession session = new HTTPSession(finalAccept, tempFileManager, loader);
-						
-						session.run();
-						
-						try {
-							finalAccept.close();
-						} catch (final IOException ignored) {
-						}
-						
-						System.out.println("took " + (System.nanoTime() - start) / 1000000 + " mircosecs");
-					}
-				});
-			} catch (final IOException e) {
-			}
-		} while(myServerSocket.isOpen());
-	}
-	
-	/**
-	 * Stop the server.
-	 */
-	public void stop() {
-	
+	public void run() {
+		List<Server> servers = new ArrayList<NanoHTTPD.Server>();
 		try {
-			myServerSocket.close();
-		} catch (final Exception e) {
-			e.printStackTrace();
+			
+			final TimeUnit timeUnit = TimeUnit.MICROSECONDS;
+			final ArrayBlockingQueue<Runnable> threadQueue = new ArrayBlockingQueue<Runnable>(100);
+			
+			ThreadPoolExecutor pool = new ThreadPoolExecutor(1, 100, 10, timeUnit, threadQueue);
+			
+			
+			for (int port : myPort) {
+				ServerSocketChannel myServerSocket = ServerSocketChannel.open();
+				
+				myServerSocket.configureBlocking(false);
+				
+				myServerSocket.bind(new InetSocketAddress(port));
+				Server currentServer = new Server(myServerSocket, pool);
+				servers.add(currentServer);
+				currentServer.start();
+				
+			}
+			
+		} catch (IOException e1) {
+			e1.printStackTrace();
 		}
+		
+		Scanner sc = new Scanner(System.in);
+		
+		while(sc.hasNext()) {
+			String next = sc.nextLine();
+			switch(next) {
+				case "kill":
+				case "shutdown":
+				case "stop":
+					System.exit(0);
+					break;
+			}
+		}
+		
 	}
 	
 	// ------------------------------------------------------------------------------- //
@@ -205,22 +177,6 @@ public abstract class NanoHTTPD {
 	// Temp file handling strategy.
 	//
 	// ------------------------------------------------------------------------------- //
-	
-	/**
-	 * Pluggable strategy for creating and cleaning up temporary files.
-	 */
-	private TempFileManagerFactory tempFileManagerFactory;
-	
-	/**
-	 * Pluggable strategy for creating and cleaning up temporary files.
-	 * 
-	 * @param tempFileManagerFactory
-	 *            new strategy for handling temp files.
-	 */
-	public void setTempFileManagerFactory(final TempFileManagerFactory tempFileManagerFactory) {
-	
-		this.tempFileManagerFactory = tempFileManagerFactory;
-	}
 	
 	/**
 	 * Factory to create temp file managers.
@@ -1151,6 +1107,81 @@ public abstract class NanoHTTPD {
 				}
 			}
 		}
+	}
+	
+	class SessionExecutor implements Runnable {
+		
+		final private SocketChannel finalAccept;
+		
+		final private TempFileManagerFactory tempFileManagerFactory;
+		
+		final private ScriptLoader loader;
+		
+		public SessionExecutor(SocketChannel finalAccept, TempFileManagerFactory tempFileManagerFactory, ScriptLoader loader) {
+		
+			this.finalAccept = finalAccept;
+			this.tempFileManagerFactory = tempFileManagerFactory;
+			this.loader = loader;
+		}
+		
+		@Override
+		public void run() {
+		
+			final TempFileManager tempFileManager = tempFileManagerFactory.create();
+			
+			final HTTPSession session = new HTTPSession(finalAccept, tempFileManager, loader);
+			
+			session.run();
+			System.out.println("Ending " + System.identityHashCode(finalAccept));
+			try {
+				finalAccept.close();
+			} catch (final IOException ignored) {
+				ignored.printStackTrace();
+			}
+			
+		}
+		
+	}
+	
+	class Server extends Thread {
+		
+		ServerSocketChannel channel;
+		
+		ThreadPoolExecutor pool;
+		
+		DefaultTempFileManagerFactory fileFactory;
+		
+		ScriptLoader scriptLoader = new ScriptLoader();
+		
+		public Server(ServerSocketChannel channel, ThreadPoolExecutor pool) {
+		
+			this.pool = pool;
+			fileFactory = new DefaultTempFileManagerFactory();
+			this.channel = channel;
+			scriptLoader.setGlobalCache(true);
+		}
+		
+		@Override
+		public void run() {
+		
+			do {
+				try {
+					
+					SocketChannel accept = channel.accept();
+					
+					if (accept == null) {
+						Thread.sleep(1l);
+						continue;
+					} else {
+						System.out.println("Starting " + System.identityHashCode(accept));
+						pool.execute(new SessionExecutor(accept, fileFactory, scriptLoader));
+					}
+				} catch (Exception e) {
+				}
+				
+			} while(true); // Create shutdonw
+		}
+		
 	}
 	
 }
